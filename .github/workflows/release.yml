@@ -1,0 +1,28 @@
+# Pushing a tag like v1.0.0 builds Seek.exe and publishes it as a GitHub release.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Seek.exe
+        shell: cmd
+        run: build.cmd
+
+      - name: Publish the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" bin/Seek.exe \
+            --title "Seek $GITHUB_REF_NAME" \
+            --notes "Download Seek.exe below and run it, then press Alt+Space to search. If Windows says it protected your PC, click More info, then Run anyway."
