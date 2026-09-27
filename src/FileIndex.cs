@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Runtime;
 using System.Threading;
 using System.Threading.Tasks;
@@ -292,7 +293,6 @@ namespace Seek
             char[] name = space.Chars;
             int folders = s.DirParent.Length;
             bool ranked = query.RanksExact;
-            int wanted = query.Length;
             fixed (byte* start = space.Buffer)
             {
                 byte* p = start, end = start + length;
@@ -314,7 +314,7 @@ namespace Seek
                     if (folder >= folders || (inside != null && !inside[folder])) continue;
                     bool onlyExact = ranked && others.Count >= max;
                     // An exact name has as many chars as the query; in UTF-8 that's 1-3 bytes each.
-                    if (onlyExact && (bytes < wanted || bytes > 3 * wanted)) continue;
+                    if (onlyExact && !query.CouldBeExact(bytes)) continue;
 
                     // Almost every name is plain ASCII: match those on the raw bytes, and only
                     // decode the rest (or a hit, to show it).
@@ -695,13 +695,221 @@ namespace Seek
     ///   .pdf          name ends with ".pdf"
     ///   thing*.pdf    wildcards: * is any run of characters, ? is one character (whole name)
     ///   report        name contains "report"; names that are exactly "report" come first
+    ///   .video        a shortcut: any video extension (also works as thing*.video)
     /// All matching ignores case and accents.
     /// </summary>
     internal sealed unsafe class Query
     {
+        const int LongestExtension = 16;
+
+        readonly Pattern[] patterns;   // a name matches if any of them does
+        readonly Pattern prefilter;    // every pattern implies this one, so it's checked first
+        readonly char[][][] extensions; // for a bare shortcut like ".video": folded extensions by length
+        readonly int exactMin, exactMax;
+
+        /// <summary>"Videos", "Images", ... when a shortcut was used; otherwise null.</summary>
+        public readonly string Shortcut;
+
+        Query(Pattern[] patterns, Pattern prefilter, char[][][] extensions, string shortcut)
+        {
+            this.patterns = patterns;
+            this.prefilter = prefilter;
+            this.extensions = extensions;
+            Shortcut = shortcut;
+            exactMin = int.MaxValue;
+            if (patterns == null) return;
+            foreach (var p in patterns)
+            {
+                exactMin = Math.Min(exactMin, p.Length);
+                exactMax = Math.Max(exactMax, p.Length);
+            }
+        }
+
+        /// <summary>Null when there's nothing to search for yet (blank, or a lone ".").</summary>
+        public static Query Parse(string text)
+        {
+            text = Normalize(text ?? "").Trim();
+            if (text.Length == 0 || text == ".") return null;
+
+            // A shortcut such as ".video" at the end stands for each of its extensions in turn
+            // (plus the literal name, however unlikely).
+            int dot = text.LastIndexOf('.');
+            Shortcuts.Kind kind;
+            if (dot >= 0 && Shortcuts.TryGet(text.Substring(dot + 1), out kind))
+            {
+                string stem = text.Substring(0, dot);
+                if (stem.Length == 0)
+                    return new Query(null, null, ExtensionTable(kind.Extensions, text.Substring(1)), kind.Label);
+
+                var patterns = new List<Pattern>();
+                foreach (string extension in kind.Extensions) patterns.Add(Pattern.Parse(stem + "." + extension));
+                patterns.Add(Pattern.Parse(text));
+                // "thing*.video" can only match names that match "thing*"; "clip.video" only
+                // names containing "clip". Checking that first skips almost every name quickly.
+                bool wildcard = stem.IndexOf('*') >= 0 || stem.IndexOf('?') >= 0;
+                return new Query(patterns.ToArray(), Pattern.Parse(wildcard ? stem + "*" : stem), null, kind.Label);
+            }
+            return new Query(new[] { Pattern.Parse(text) }, null, null, null);
+        }
+
+        static char[][][] ExtensionTable(string[] list, string literal)
+        {
+            var byLength = new List<char[]>[LongestExtension + 1];
+            foreach (string extension in list.Concat(new[] { literal }))
+            {
+                if (extension.Length == 0 || extension.Length > LongestExtension) continue;
+                var folded = new char[extension.Length];
+                for (int k = 0; k < folded.Length; k++) folded[k] = Pattern.Fold[extension[k]];
+                if (byLength[folded.Length] == null) byLength[folded.Length] = new List<char[]>();
+                byLength[folded.Length].Add(folded);
+            }
+            return byLength.Select(l => l == null ? null : l.ToArray()).ToArray();
+        }
+
+        /// <summary>Does the name's last extension appear in the shortcut's table?</summary>
+        bool HasExtension(char[] s, int offset, int length)
+        {
+            int end = offset + length;
+            for (int dot = end - 1; dot >= offset && dot >= end - LongestExtension - 1; dot--)
+            {
+                if (Pattern.Fold[s[dot]] != '.') continue;
+                int n = end - dot - 1;
+                var candidates = n < extensions.Length ? extensions[n] : null;
+                if (candidates == null) return false;
+                foreach (char[] extension in candidates)
+                {
+                    int k = 0;
+                    while (k < n && Pattern.Fold[s[dot + 1 + k]] == extension[k]) k++;
+                    if (k == n) return true;
+                }
+                return false;
+            }
+            return false;
+        }
+
+        bool HasExtension(byte* s, int length)
+        {
+            for (int dot = length - 1; dot >= 0 && dot >= length - LongestExtension - 1; dot--)
+            {
+                if (s[dot] != '.') continue;
+                int n = length - dot - 1;
+                var candidates = n < extensions.Length ? extensions[n] : null;
+                if (candidates == null) return false;
+                foreach (char[] extension in candidates)
+                {
+                    int k = 0;
+                    while (k < n && Pattern.Fold[s[dot + 1 + k]] == extension[k]) k++;
+                    if (k == n) return true;
+                }
+                return false;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Japanese input can type full-width symbols (＊ ． and so on); treat them as the plain
+        /// ones so thing＊．pdf means the same as thing*.pdf.
+        /// </summary>
+        static string Normalize(string text)
+        {
+            var chars = text.ToCharArray();
+            for (int i = 0; i < chars.Length; i++)
+            {
+                char c = chars[i];
+                if (c >= '！' && c <= '～') chars[i] = (char)(c - 0xFEE0);
+                else if (c == '。') chars[i] = '.';
+                else if (c == '　') chars[i] = ' ';
+            }
+            return new string(chars);
+        }
+
+        public bool RanksExact
+        {
+            get { return patterns != null && patterns[0].RanksExact; }
+        }
+
+        /// <summary>Whether a name of this many UTF-8 bytes (1 to 3 per char) could be an exact match.</summary>
+        public bool CouldBeExact(int bytes)
+        {
+            return bytes >= exactMin && bytes <= 3 * exactMax;
+        }
+
+        public bool IsExact(char[] s, int offset, int length)
+        {
+            if (patterns == null || (prefilter != null && !prefilter.IsMatch(s, offset, length))) return false;
+            foreach (var p in patterns)
+                if (p.IsExact(s, offset, length)) return true;
+            return false;
+        }
+
+        public bool IsMatch(char[] s, int offset, int length)
+        {
+            if (extensions != null) return HasExtension(s, offset, length);
+            if (prefilter != null && !prefilter.IsMatch(s, offset, length)) return false;
+            foreach (var p in patterns)
+                if (p.IsMatch(s, offset, length)) return true;
+            return false;
+        }
+
+        public bool IsExact(byte* s, int length)
+        {
+            if (patterns == null || (prefilter != null && !prefilter.IsMatch(s, length))) return false;
+            foreach (var p in patterns)
+                if (p.IsExact(s, length)) return true;
+            return false;
+        }
+
+        public bool IsMatch(byte* s, int length)
+        {
+            if (extensions != null) return HasExtension(s, length);
+            if (prefilter != null && !prefilter.IsMatch(s, length)) return false;
+            foreach (var p in patterns)
+                if (p.IsMatch(s, length)) return true;
+            return false;
+        }
+    }
+
+    /// <summary>Shortcuts like .video that stand for a whole family of extensions.</summary>
+    internal static class Shortcuts
+    {
+        public sealed class Kind
+        {
+            public string Label;
+            public string[] Extensions;
+        }
+
+        static readonly Dictionary<string, Kind> byName = new Dictionary<string, Kind>(StringComparer.OrdinalIgnoreCase);
+
+        static Shortcuts()
+        {
+            // No "mts" or "ts": those are far more often TypeScript files than videos.
+            Add("Videos", "mp4 mkv avi mov wmv webm flv m4v mpg mpeg 3gp m2ts vob ogv", "video videos movie movies");
+            Add("Images", "jpg jpeg png gif bmp webp tif tiff heic heif avif svg ico psd jfif raw cr2 nef arw dng", "image images photo photos picture pictures");
+            Add("Audio", "mp3 wav flac m4a aac ogg opus wma aiff alac mid midi", "audio music song songs");
+            Add("Documents", "pdf doc docx odt rtf txt md xls xlsx ods csv ppt pptx odp epub", "document documents docs");
+            Add("Archives", "zip rar 7z tar gz tgz bz2 xz zst iso cab", "archive archives");
+            Add("Launchers", "exe lnk bat cmd msi url appref-ms", "launcher launchers app apps program programs");
+            Add("Code", "cs js ts jsx tsx py java c cpp h hpp go rs rb php html css scss json xml yml yaml sql sh ps1 lua kt swift vue svelte", "code");
+        }
+
+        static void Add(string label, string extensions, string names)
+        {
+            var kind = new Kind { Label = label, Extensions = extensions.Split(' ') };
+            foreach (string name in names.Split(' ')) byName[name] = kind;
+        }
+
+        public static bool TryGet(string name, out Kind kind)
+        {
+            return byName.TryGetValue(name, out kind);
+        }
+    }
+
+    /// <summary>One compiled pattern: a suffix, a wildcard pattern, or text to find inside names.</summary>
+    internal sealed unsafe class Pattern
+    {
         enum Mode { Contains, Suffix, Wildcard }
 
-        static readonly char[] Fold = BuildFoldTable();
+        internal static readonly char[] Fold = BuildFoldTable();
 
         readonly Mode mode;
         readonly char[] pattern;
@@ -710,7 +918,7 @@ namespace Seek
         readonly int tail;      // literal characters after the last *
         readonly int minLength; // non-* characters
 
-        Query(Mode mode, char[] pattern)
+        Pattern(Mode mode, char[] pattern)
         {
             this.mode = mode;
             this.pattern = pattern;
@@ -733,11 +941,9 @@ namespace Seek
             get { return pattern.Length; }
         }
 
-        /// <summary>Null when there's nothing to search for yet (blank, or a lone ".").</summary>
-        public static Query Parse(string text)
+        /// <summary>Compiles already-trimmed, non-empty text.</summary>
+        public static Pattern Parse(string text)
         {
-            text = (text ?? "").Trim();
-            if (text.Length == 0 || text == ".") return null;
             bool wildcard = text.IndexOf('*') >= 0 || text.IndexOf('?') >= 0;
             // ".pdf" means "ends in .pdf", so ".p*" should mean "extension starting with p",
             // not "name starting with .p".
@@ -751,9 +957,9 @@ namespace Seek
             }
             char[] pattern = folded.ToArray();
 
-            if (wildcard) return new Query(Mode.Wildcard, pattern);
-            if (text[0] == '.') return new Query(Mode.Suffix, pattern);
-            return new Query(Mode.Contains, pattern);
+            if (wildcard) return new Pattern(Mode.Wildcard, pattern);
+            if (text[0] == '.') return new Pattern(Mode.Suffix, pattern);
+            return new Pattern(Mode.Contains, pattern);
         }
 
         public bool IsExact(char[] s, int offset, int length)
@@ -926,6 +1132,10 @@ namespace Seek
                 {
                     string parts = ((char)c).ToString().Normalize(System.Text.NormalizationForm.FormD);
                     if (parts.Length > 1 && parts[0] < 0x80 && char.IsLetter(parts[0])) folded = char.ToUpperInvariant(parts[0]);
+                }
+                else if (c >= 0xFF01 && c <= 0xFF5E)
+                {
+                    folded = char.ToUpperInvariant((char)(c - 0xFEE0)); // full-width Ａ matches A
                 }
                 table[c] = folded;
             }

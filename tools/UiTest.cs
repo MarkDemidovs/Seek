@@ -37,6 +37,7 @@ static class UiTest
             Step("folderish", "Downloads", Key.Down, Key.Down, Key.Down, Key.Down, Key.Down, Key.Down, Key.Up);
             Step("empty", "");
             Step("dot", ".");
+            Step("shortcut", ".video");
             // Stepping into a folder and back out (null text = keep what's typed).
             Step("scope-1-found", "touhou", Key.Down);
             Step("scope-2-inside", null, Key.Tab);

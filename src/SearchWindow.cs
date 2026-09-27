@@ -65,10 +65,11 @@ namespace Seek
         int selected;
         string preferPath; // select this result on the next render (e.g. the folder we just left)
         string renderedScope;
+        string renderedQuery;
         int generation;
         CancellationTokenSource running;
         string notice;
-        Point lastMouse;
+        System.Drawing.Point lastCursor;
         Point pressedAt;
         int pressedRow = -1;
 
@@ -210,7 +211,7 @@ namespace Seek
             Keyboard.Focus(box);
             box.SelectAll();
             notice = null; // "Path copied" etc. belong to the previous visit
-            lastMouse = Mouse.GetPosition(this);
+            lastCursor = System.Windows.Forms.Cursor.Position;
             ticker.Start();
             Search();
             // Windows may refuse focus (another app is in active use). A bar you can't type
@@ -277,7 +278,7 @@ namespace Seek
             {
                 chip.Visibility = Visibility.Collapsed;
                 placeholderMain.Text = "Search files";
-                placeholderHint.Text = "      .pdf     notes.txt     report*2026.pdf";
+                placeholderHint.Text = "      .pdf     .video     report*2026.pdf";
                 return;
             }
             var scope = scopes[scopes.Count - 1];
@@ -311,8 +312,17 @@ namespace Seek
                 Toggle();
                 handled = true;
             }
+            // Letting go of Alt (after Alt+Space) would put the window into "menu mode", and
+            // the next key typed would be swallowed looking for a menu. The bar has no menu.
+            else if (msg == WM_SYSCOMMAND && (wParam.ToInt64() & 0xFFF0) == SC_KEYMENU)
+            {
+                handled = true;
+            }
             return IntPtr.Zero;
         }
+
+        const int WM_SYSCOMMAND = 0x0112;
+        const int SC_KEYMENU = 0xF100;
 
         // ---- Searching --------------------------------------------------------------------
 
@@ -347,9 +357,14 @@ namespace Seek
 
         void Render(List<Hit> found)
         {
-            string keep = preferPath ?? (selected < hits.Count ? hits[selected].Path : null);
-            preferPath = null;
             string scope = scopes.Count > 0 ? scopes[scopes.Count - 1].Folder : null;
+            // Typing something new selects the new top result; a refresh of the same search
+            // (files changed on disk) keeps whatever was selected.
+            string query = box.Text.Trim() + "\n" + scope;
+            bool sameQuery = query == renderedQuery;
+            renderedQuery = query;
+            string keep = preferPath ?? (sameQuery && selected < hits.Count ? hits[selected].Path : null);
+            preferPath = null;
             if (!SameHits(found, hits) || scope != renderedScope)
             {
                 hits = found;
@@ -376,13 +391,15 @@ namespace Seek
         /// <summary>Status text, empty-state message and which parts of the window are showing.</summary>
         void UpdateChrome()
         {
-            bool typed = Query.Parse(box.Text) != null;
+            var query = Query.Parse(box.Text);
+            bool typed = query != null;
             bool hasQuery = typed || scopes.Count > 0;
             int progress = index.ScanProgress;
             bool indexing = !index.Complete && progress >= 0;
 
             if (notice != null) status.Text = notice;
             else if (indexing) status.Text = "Indexing… " + progress.ToString("N0");
+            else if (query != null && query.Shortcut != null) status.Text = query.Shortcut; // shows the shortcut was understood
             else status.Text = "";
 
             string empty = null;
@@ -585,11 +602,13 @@ namespace Seek
         {
             int i = (int)((FrameworkElement)sender).Tag;
             Point at = e.GetPosition(this);
-            // Only real mouse movement selects, so results appearing under a resting cursor
-            // don't steal the keyboard selection.
-            if (at != lastMouse)
+            // Only real mouse movement selects, so results appearing under a resting pointer
+            // don't steal the keyboard selection. Screen position is reliable even right after
+            // the bar appears, when WPF's own idea of where the mouse is can be stale.
+            var cursor = System.Windows.Forms.Cursor.Position;
+            if (cursor != lastCursor)
             {
-                lastMouse = at;
+                lastCursor = cursor;
                 if (selected != i)
                 {
                     selected = i;

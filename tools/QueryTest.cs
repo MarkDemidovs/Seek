@@ -41,6 +41,13 @@ static class QueryTest
             Tuple.Create(@"h\" + new string('m', 251) + ".log", 0.2),
             Tuple.Create(@"h\" + new string('あ', 100) + ".txt", 0.2),
             Tuple.Create(@"h\" + "\U0001F3B5music.mp3", 0.2),
+            Tuple.Create(@"m\clip.mp4", 0.19),
+            Tuple.Create(@"m\movie.MKV", 0.18),
+            Tuple.Create(@"m\notes.video", 0.17),
+            Tuple.Create(@"m\photo.jpg", 0.16),
+            Tuple.Create(@"m\run.bat", 0.15),
+            Tuple.Create(@"m\Game.lnk", 0.14),
+            Tuple.Create(@"m\song.flac", 0.13),
             Tuple.Create(@"node_modules\x.pdf", 13.0),
             Tuple.Create(@".git\y.pdf", 13.0),
         };
@@ -85,6 +92,19 @@ static class QueryTest
         Check("紅魔", "東方紅魔郷.cfg");
         Check("ガイド", "ガイド.txt");
         Check("カイド"); // kana voicing marks still matter
+        // Shortcuts stand for a family of extensions, alone or at the end of a pattern.
+        Check(".video", "clip.mp4", "movie.MKV", "notes.video");
+        Check(".videos", "clip.mp4", "movie.MKV");
+        Check("clip*.video", "clip.mp4");
+        Check("movie.video", "movie.MKV");
+        Check(".image", "photo.jpg");
+        Check(".audio", "\U0001F3B5music.mp3", "song.flac");
+        Check(".launcher", "run.bat", "Game.lnk");
+        Check(".document", "longfile.pdf", "report.PDF", "thing.pdf", "thing report.pdf", "thing-x-thing2.pdf");
+        Check(".vid"); // half-typed: not a shortcut yet
+        // Full-width symbols from Japanese input mean the same as the plain ones.
+        Check("ｔｈｉｎｇ＊．ｐｄｆ", "thing.pdf", "thing report.pdf", "thing-x-thing2.pdf", "thingthing2.pdf", "THING.PDF");
+        Check("thing＊。pdf", "thing.pdf", "thing report.pdf", "thing-x-thing2.pdf", "thingthing2.pdf", "THING.PDF");
         Check("x.pdf");
         Check("y.pdf");
         Check("zzqq");

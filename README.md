@@ -25,6 +25,22 @@ Press **Esc** or click anywhere else to hide it.
 
 `*` means any text and `?` means any one character. Upper and lower case don't matter, and neither do accents.
 
+## Shortcuts
+
+Instead of one extension, you can type a whole kind of file:
+
+| Type | Finds |
+| --- | --- |
+| `.video` | mp4, mkv, mov, avi, webm and other videos |
+| `.image` | jpg, png, gif, webp, heic and other images |
+| `.audio` | mp3, wav, flac, m4a and other audio |
+| `.document` | pdf, Word, Excel, PowerPoint, txt and similar |
+| `.archive` | zip, rar, 7z, iso and similar |
+| `.launcher` | programs and shortcuts: exe, lnk, url, bat, cmd, msi |
+| `.code` | source code files |
+
+They work in patterns too: `holiday*.video` finds videos whose names start with "holiday".
+
 ## How it works
 
 1. Seek goes through every file and folder on your drives and saves a list of them in `%LOCALAPPDATA%\Seek\index.bin`, sorted from newest to oldest. The first time, this takes a moment.
