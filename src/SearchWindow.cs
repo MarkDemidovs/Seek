@@ -569,6 +569,10 @@ namespace Seek
                     {
                         EnterScope(SelectedFolder());
                     }
+                    else if (hits.Count > 0)
+                    {
+                        Reveal(hits[selected]); // a file: open the folder it's in, with it selected
+                    }
                     e.Handled = true;
                     break;
                 case Key.Right:

@@ -12,6 +12,8 @@ Press **Alt+Space** anywhere. A search bar pops up in the middle of your screen.
 
 If a result is a folder, press **Right arrow** or **Tab** to search only inside that folder. Press **Backspace** or **Left arrow** to go back.
 
+If a result is a file, press **Tab** to open the folder it's in, with the file selected.
+
 Press **Esc** or click anywhere else to hide it.
 
 ## Searching

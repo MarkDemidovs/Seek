@@ -44,7 +44,7 @@ static class UiTest
             Step("scope-3-typed", ".exe");
             Step("scope-4-back", "", Key.Back);
             Step("scope-5-right-left", null, Key.Right, Key.Left);
-            Step("scope-6-deeper", "Downloads", Key.Tab, Key.Tab); // 2nd Tab: a file is selected, so nothing
+            Step("scope-6-deeper", "Downloads", Key.Tab); // (Tab on a file would open Explorer, so not here)
             Step("scope-7-esc-out", null, Key.Escape);
             // Mouse: click the › on the first folder row to go in, then the chip to come back.
             var rows = (System.Collections.Generic.List<Border>)typeof(SearchWindow).GetField("rows", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(window);
