@@ -1,6 +1,4 @@
-# Seek
-
-A small, fast file search for Windows.
+<p align="center"><img src="assets/banner.png" alt="Seek, instant file search for Windows"></p>
 
 ## Download
 
